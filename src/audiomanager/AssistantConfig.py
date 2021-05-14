@@ -1,0 +1,4 @@
+
+
+
+LENGTH_SPOKEN = 0
