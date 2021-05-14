@@ -1,0 +1,44 @@
+# PROJECT LOCATION
+PROJECT_LOCATION = '/Users/sheetansh.kumar/PycharmProjects/TesVi/'
+
+# MEDIA LOCATION
+
+MEDIA_LOCATION = PROJECT_LOCATION + 'media/'
+
+# ---------------------------------------------------------
+
+# define all audio constants here
+
+BLANKAUDIO = 'blank'
+
+MUSIC_LEVEL = 0.25
+AUDIO_LEVEL = 2
+
+BELL = 'bell.mp3'
+SCREEN = 'screen_'
+
+AUDIO_LOCATION = MEDIA_LOCATION + 'audio/'
+
+
+# -------------static audio constants
+AUDIO_LOCATION_STATIC = AUDIO_LOCATION + 'static/'
+
+AUDIO_LOCATION_BLANK = AUDIO_LOCATION_STATIC + 'blank/'
+
+AUDIO_LOCATION_STATIC_MALE = AUDIO_LOCATION_STATIC + 'male/'
+AUDIO_LOCATION_STATIC_FEMALE = AUDIO_LOCATION_STATIC + 'female/'
+AUDIO_LOCATION_STATIC_GENDER = AUDIO_LOCATION_STATIC_FEMALE
+
+AUDIO_LOCATION_MISC = AUDIO_LOCATION_STATIC + 'misc/'
+
+
+
+# ----------dynamic audio constants
+AUDIO_LOCATION_DYNAMIC = AUDIO_LOCATION + 'dynamic/'
+
+AUDIO_LOCATION_DYNAMIC_NORMAL = AUDIO_LOCATION_DYNAMIC + 'normal/'
+
+MAIN_AUDIO_WITHOUT_MUSIC = 'main_without_music.mp3'
+
+MAIN_AUDIO = AUDIO_LOCATION_DYNAMIC_NORMAL + MAIN_AUDIO_WITHOUT_MUSIC
+
