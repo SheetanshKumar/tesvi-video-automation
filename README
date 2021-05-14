@@ -1,1 +1,5 @@
+Install pip envs present in the Requirements.txt
+Install ffmpeg in cmd
+Install other dependencies
 
+Run videoStream.py
