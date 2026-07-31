@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tesvi
+          POSTGRES_PASSWORD: tesvi
+          POSTGRES_DB: tesvi
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tesvi -d tesvi"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: install golang-migrate
+        run: |
+          curl -sSL https://github.com/golang-migrate/migrate/releases/download/v4.19.1/migrate.linux-amd64.tar.gz | tar xz
+          sudo mv migrate /usr/local/bin/
+      - name: migrate up
+        run: make migrate-up
+      - name: migrate down (full teardown)
+        run: |
+          for _ in $(seq 1 9); do make migrate-down; done
+      - name: migrate up again (must be reversible)
+        run: make migrate-up
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: build all Go services
+        run: make go-build
+      - name: test all Go services
+        run: make go-test
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: install extractor with dev extras
+        run: make py-install
+      - name: lint
+        run: ruff check services/extractor
+      - name: test
+        run: make py-test
+
+  typescript:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [renderer, reviewer-ui]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - working-directory: services/${{ matrix.service }}
+        run: npm install --no-audit --no-fund
+      - working-directory: services/${{ matrix.service }}
+        run: npm run typecheck

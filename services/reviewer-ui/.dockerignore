@@ -1,0 +1,5 @@
+.git
+node_modules
+.next
+README.md
+next-env.d.ts
