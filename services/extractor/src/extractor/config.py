@@ -14,7 +14,7 @@ class Config:
     anthropic_model: str
 
     @classmethod
-    def load(cls) -> "Config":
+    def load(cls) -> Config:
         return cls(
             port=int(os.environ.get("PORT", "8080")),
             database_url=os.environ.get("DATABASE_URL"),
