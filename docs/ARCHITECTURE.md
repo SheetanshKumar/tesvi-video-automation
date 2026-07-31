@@ -142,7 +142,8 @@ preconfigured.
     ├─ TextAdapter          # already-normalized text, no fetch needed
     ├─ ArticleUrlAdapter    # trafilatura / readability-lxml for clean extraction
     ├─ RssAdapter           # feedparser; yields ArticleUrl subjobs
-    └─ WebsiteAdapter       # bounded crawler (respects robots.txt, depth-limited)
+    ├─ WebsiteAdapter       # bounded crawler (respects robots.txt, depth-limited)
+    └─ PdfAdapter           # pypdfium2 for text PDFs; Document AI for scans (§18)
   ```
 - **Output**: writes a `raw_content` blob to `gs://tesvi-sources/<hash>.txt`
   and a `sources` row with `content_hash` (SHA-256 of normalized text) for
@@ -152,6 +153,14 @@ preconfigured.
   - Domain allow-list configured in Secret Manager — no arbitrary URL fetch.
   - Fetch timeouts + circuit breaker per domain.
   - HTML → text via `trafilatura` (much better than BS4 for article extraction).
+
+> **Design rule — delivery-mode-agnostic**: the extractor MUST NOT know
+> about YouTube, video templates, or any specific delivery surface. Its
+> job ends when validated questions are in the DB. This is what lets a
+> future test-runner, flashcard generator, or podcast synthesizer
+> (see §18) plug in without touching extraction. Anything YouTube-shaped
+> (SEO tags, thumbnail hints, description templates) belongs in the
+> video-render or publisher layer, never in the extraction prompt.
 
 ### 3.3 Extraction Worker (`extractor`)
 
@@ -181,11 +190,16 @@ preconfigured.
 
 - **Runtime**: Cloud Run service behind IAP.
 - **Frontend**: Next.js.
-- **Function**: humans approve/reject/edit questions before they can be
-  rendered. Rejection reasons feed back into extraction prompts as future
+- **Function**: humans flip `question_sets.publish_status` to
+  `approved`/`rejected` and edit individual questions before public
+  delivery. Rejection reasons feed back into extraction prompts as future
   few-shot examples (a small feedback loop).
-- **Why mandatory before v1 GA**: mitigates hallucination *and* YouTube
-  spam-flag risk (see §14).
+- **Scope**: gates *public* delivery (YouTube, public test packs) only.
+  An owner consuming their own extracted set on a private surface
+  (personal test session) does not require reviewer approval —
+  `extraction_status = 'extracted'` is enough. See §18.
+- **Why mandatory before public v1 GA**: mitigates hallucination *and*
+  YouTube spam-flag risk (see §14).
 
 ### 3.5 Render Orchestrator (`render-orchestrator`)
 
@@ -252,10 +266,10 @@ create extension if not exists pgcrypto;
 -- 4.1 Sources: raw inputs
 create table sources (
   id                  uuid primary key default gen_random_uuid(),
-  type                text not null check (type in ('text','article_url','rss_item','website')),
+  type                text not null check (type in ('text','article_url','rss_item','website','pdf','user_upload')),
   uri                 text,                            -- URL if applicable
   raw_content_gcs_uri text not null,                   -- gs://tesvi-sources/<sha>.txt
-  content_hash        text not null unique,            -- sha256 of normalized text
+  content_hash        text not null,                   -- sha256 of normalized text
   title               text,
   author              text,
   published_at        timestamptz,
@@ -263,22 +277,45 @@ create table sources (
   ingest_status       text not null default 'pending'
                           check (ingest_status in ('pending','fetched','failed','skipped')),
   ingest_error        text,
-  metadata            jsonb not null default '{}'::jsonb
+  -- Multi-tenancy (see §18: multi-modal delivery). owner_id is null for
+  -- system-ingested sources (RSS crawlers, admin uploads); populated for
+  -- user-uploaded PDFs etc.
+  owner_id            uuid,                            -- FK users(id) when users table exists
+  visibility          text not null default 'private'
+                          check (visibility in ('private','org','public')),
+  metadata            jsonb not null default '{}'::jsonb,
+  -- Content dedup is scoped to owner: two users uploading the same PDF
+  -- each get their own row, but one user re-uploading dedups.
+  unique (owner_id, content_hash)
 );
 create index on sources (type, ingested_at desc);
+create index on sources (owner_id) where owner_id is not null;
 
 -- 4.2 Question sets: a batch generated from one source
+--
+-- Two independent status axes (see §18):
+--   extraction_status  — pipeline state (did the LLM run successfully?)
+--   publish_status     — public-consumption gate (has a human approved
+--                        this set for YouTube / any public delivery?)
+--
+-- An owner can always consume their own extracted set in private modes
+-- (test-env, personal review). publish_status only gates public surfaces.
 create table question_sets (
   id                  uuid primary key default gen_random_uuid(),
   source_id           uuid references sources(id) on delete set null,
+  owner_id            uuid,                            -- FK users(id); null = system-owned
+  visibility          text not null default 'private'
+                          check (visibility in ('private','org','public')),
   title               text not null,
   topic               text not null,
   subtopic            text,
   language            text not null default 'en',
   extraction_status   text not null default 'pending'
                           check (extraction_status in
-                                 ('pending','extracting','extracted',
-                                  'approved','rejected','failed')),
+                                 ('pending','extracting','extracted','failed')),
+  publish_status      text not null default 'unreviewed'
+                          check (publish_status in
+                                 ('unreviewed','approved','rejected')),
   extraction_model    text,                            -- 'claude-sonnet-5'
   extraction_cost_usd numeric(10,4),
   reviewed_by         text,
@@ -287,7 +324,9 @@ create table question_sets (
   metadata            jsonb not null default '{}'::jsonb
 );
 create index on question_sets (extraction_status);
+create index on question_sets (publish_status);
 create index on question_sets (topic);
+create index on question_sets (owner_id) where owner_id is not null;
 
 -- 4.3 Questions
 create table questions (
@@ -806,3 +845,144 @@ this line item to dominate.
 - **No self-hosted anything** — this is Cloud Run + managed services on
   purpose; the moment you have a Kubernetes cluster, you have an ops
   team.
+
+---
+
+## 18. Future: multi-modal delivery (test env, flashcards, more)
+
+The v2 architecture deliberately treats **extraction as the moat** and
+**delivery formats as pluggable consumers** of the shared
+`question_sets` / `questions` tables. The video renderer is the first
+consumer; several others are natural extensions:
+
+```
+source → extraction → questions in DB ─┬─► video renderer      (v2, planned)
+                                        ├─► test runner         (this section)
+                                        ├─► flashcard generator (later)
+                                        └─► podcast / audio     (later)
+```
+
+### 18.1 Motivating scenario
+
+A student covers a topic, uploads the PDF / notes / article to TesVi,
+and gets an **interactive test session in the browser** — same
+extraction pipeline, different terminal delivery format. No video, no
+YouTube, no reviewer approval needed for their own private use.
+
+Longer-term this could be the *primary* B2C product, with video as a
+marketing/acquisition surface — but that's a business decision, not an
+architectural one. The design supports either framing.
+
+### 18.2 What v2 already gets right for this
+
+- Extraction is delivery-mode-agnostic (see rule in §3).
+- `sources.owner_id` + `sources.visibility` (added in §4.1) support
+  user-scoped ingestion from day one.
+- `question_sets` splits `extraction_status` (pipeline state) from
+  `publish_status` (public-delivery gate, §4.2). Private/self-consumption
+  only needs the former.
+- Source adapters are polymorphic; adding a `PdfAdapter` /
+  `UserUploadAdapter` is a new class, not a pipeline change.
+
+### 18.3 What's genuinely new when we build it
+
+**New services / infra**:
+- **`test-runner`** — Cloud Run service; stateful per active session
+  (Memorystore/Redis for hot state, Postgres for durable records).
+  Handles: start attempt, deliver next question, record answer, compute
+  score, resume mid-session.
+- **External auth** — Firebase Auth or Identity Platform (Google sign-in
+  at minimum). v2's IAP-only model assumes internal users; students are
+  external.
+- **Web frontend** — Next.js app, separate from the reviewer UI.
+- **`PdfAdapter`** in source-ingestor — one new class; PDF text
+  extraction via `pypdfium2` or Google Document AI for scanned PDFs.
+
+**New tables**:
+
+```sql
+-- 18.a Users
+create table users (
+  id           uuid primary key default gen_random_uuid(),
+  email        text not null unique,
+  display_name text,
+  auth_provider text not null,        -- 'google','password',...
+  external_uid  text not null,        -- provider's user id
+  plan          text not null default 'free'
+                    check (plan in ('free','pro','edu')),
+  created_at   timestamptz not null default now(),
+  metadata     jsonb not null default '{}'::jsonb,
+  unique (auth_provider, external_uid)
+);
+
+-- 18.b Test templates: quiz-taking config (analog of video_templates)
+create table test_templates (
+  id            uuid primary key default gen_random_uuid(),
+  name          text not null,
+  version       int not null,
+  spec          jsonb not null,   -- time_limit_s, shuffle, hints, negative_marks, review_mode
+  created_at    timestamptz not null default now(),
+  unique (name, version)
+);
+
+-- 18.c Attempts: one per user × question_set × start
+create table test_attempts (
+  id               uuid primary key default gen_random_uuid(),
+  user_id          uuid not null references users(id),
+  question_set_id  uuid not null references question_sets(id),
+  test_template_id uuid not null references test_templates(id),
+  status           text not null default 'in_progress'
+                       check (status in ('in_progress','submitted','abandoned','expired')),
+  started_at       timestamptz not null default now(),
+  submitted_at     timestamptz,
+  time_limit_s     int,
+  score            numeric(6,2),
+  max_score        numeric(6,2),
+  metadata         jsonb not null default '{}'::jsonb
+);
+create index on test_attempts (user_id, started_at desc);
+
+-- 18.d Per-question answers within an attempt
+create table attempt_answers (
+  id                 uuid primary key default gen_random_uuid(),
+  attempt_id         uuid not null references test_attempts(id) on delete cascade,
+  question_id        uuid not null references questions(id),
+  selected_options   text[] not null default '{}',
+  is_correct         boolean,
+  time_spent_ms      int,
+  answered_at        timestamptz not null default now(),
+  unique (attempt_id, question_id)
+);
+```
+
+### 18.4 Policy differences from the video product
+
+- **No reviewer approval required** for owner-self-consumption. Enforced
+  at the API: the test-runner accepts any `question_set` where
+  `owner_id = current_user_id AND extraction_status = 'extracted'`,
+  regardless of `publish_status`.
+- **Per-user extraction budgets** — the current per-source/per-day caps
+  aren't enough once students self-serve; add per-user daily/monthly
+  token caps stored on the `users` row (or a `user_usage` table). Free
+  tier could hallucinate a $500 bill in an afternoon otherwise.
+- **YouTube-specific risks don't apply** — this surface is much lower
+  policy risk than mass-upload video.
+- **PII posture changes** — users have accounts, so this becomes a
+  real product that needs a privacy policy, GDPR/DPDP handling, data
+  export/delete flows. None of that is in scope for v2.
+
+### 18.5 What NOT to build into v2 for this
+
+Resist the temptation to pre-build test-env plumbing during Phase A–D:
+
+- Don't add `users` / attempts tables until you actually build the
+  test-runner. Empty tables rot.
+- Don't add Firebase Auth until then; IAP is fine for the internal v2.
+- Don't split the API into "internal" and "public" versions yet — do
+  that when the second consumer exists.
+
+The **only** things we do now to keep the door open are the schema
+adjustments already folded into §4 (`owner_id`, `visibility`, split
+`publish_status` from `extraction_status`) and the delivery-agnostic
+rule on the extractor (§3.3). Everything else is deferred until we
+commit to building it.
