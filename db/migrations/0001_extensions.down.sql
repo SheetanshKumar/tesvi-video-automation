@@ -1,0 +1,2 @@
+-- pgcrypto is not dropped: other schemas or future migrations may depend on it.
+-- Manually drop if you're truly tearing down the DB.
