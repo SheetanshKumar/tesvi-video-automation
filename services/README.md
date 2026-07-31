@@ -68,6 +68,17 @@ services/<name>/
 
 ## Status
 
-Nothing is scaffolded yet — this PR only defines the layout and the
-language choices. Each service will land in its own PR as we build out
-the phases in `docs/ARCHITECTURE.md` §15.
+All seven services have runnable skeletons: each builds/typechecks and
+exposes `/healthz` (except `renderer`, which is a Cloud Run Job invoked
+via `RENDER_ID` env var, not HTTP). None contain real business logic
+yet — that lands per-phase per
+[`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) §15.
+
+Sanity commands from repo root:
+
+```bash
+make go-build       # builds api / source-ingestor / render-orchestrator / publisher
+make ts-typecheck   # typechecks renderer + reviewer-ui (needs `make ts-install` first)
+make py-install     # installs extractor into current Python env
+make py-test        # runs extractor smoke tests
+```

@@ -74,9 +74,18 @@ Questions are currently defined in
 ```
 docs/                 # v2 architecture design
 db/                   # v2 Postgres schema (golang-migrate)
-services/             # v2 service scaffolds (per §3 of the arch doc)
-libs/                 # v2 shared per-language libraries
+services/             # v2 service skeletons (health-check only; see services/README.md)
+│   ├── api                 (Go)
+│   ├── source-ingestor     (Go)
+│   ├── extractor           (Python)
+│   ├── render-orchestrator (Go)
+│   ├── renderer            (TS, Cloud Run Job)
+│   ├── publisher           (Go)
+│   └── reviewer-ui         (TS, Next.js)
+libs/                 # v2 shared per-language libraries (empty)
 infra/                # v2 Terraform (placeholder)
+go.work               # Go workspace listing all Go modules
+.github/workflows/    # CI pipelines (migrations, Go, Python, TS)
 
 src/                  # v1 pipeline (current, being retired)
 ├── audiomanager/     # TTS narration + audio timeline/mixing (ffmpeg, gTTS)

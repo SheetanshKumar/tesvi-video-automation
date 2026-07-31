@@ -1,0 +1,8 @@
+go 1.23
+
+use (
+	./services/api
+	./services/publisher
+	./services/render-orchestrator
+	./services/source-ingestor
+)

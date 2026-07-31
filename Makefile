@@ -43,3 +43,68 @@ migrate-status: ## Show the current migration version
 migrate-create: ## Create a new migration pair. Usage: make migrate-create name=add_users_table
 	@if [ -z "$(name)" ]; then echo "usage: make migrate-create name=<snake_case_name>"; exit 1; fi
 	migrate create -ext sql -dir $(MIGRATIONS_DIR) -seq $(name)
+
+# ---------------------------------------------------------------- go services --
+
+GO_SERVICES := api source-ingestor render-orchestrator publisher
+
+.PHONY: go-build
+go-build: ## Build every Go service
+	@for svc in $(GO_SERVICES); do \
+	    echo "==> services/$$svc"; \
+	    (cd services/$$svc && go build ./...) || exit 1; \
+	done
+
+.PHONY: go-test
+go-test: ## Test every Go service
+	@for svc in $(GO_SERVICES); do \
+	    echo "==> services/$$svc"; \
+	    (cd services/$$svc && go test ./...) || exit 1; \
+	done
+
+.PHONY: go-tidy
+go-tidy: ## Run `go mod tidy` in every Go module
+	@for svc in $(GO_SERVICES); do \
+	    echo "==> services/$$svc"; \
+	    (cd services/$$svc && go mod tidy) || exit 1; \
+	done
+
+# ---------------------------------------------------------- python services --
+
+.PHONY: py-install
+py-install: ## Install the extractor (with dev extras) into the current environment
+	python -m pip install -e 'services/extractor[dev]'
+
+.PHONY: py-test
+py-test: ## Run extractor tests
+	python -m pytest services/extractor
+
+# -------------------------------------------------------------- ts services --
+
+TS_SERVICES := renderer reviewer-ui
+
+.PHONY: ts-install
+ts-install: ## `npm install` in every TS service
+	@for svc in $(TS_SERVICES); do \
+	    echo "==> services/$$svc"; \
+	    (cd services/$$svc && npm install --no-audit --no-fund) || exit 1; \
+	done
+
+.PHONY: ts-typecheck
+ts-typecheck: ## Typecheck every TS service
+	@for svc in $(TS_SERVICES); do \
+	    echo "==> services/$$svc"; \
+	    (cd services/$$svc && npm run typecheck) || exit 1; \
+	done
+
+.PHONY: ts-build
+ts-build: ## Build every TS service (currently only renderer produces artefacts here)
+	@cd services/renderer && npm run build
+
+# ------------------------------------------------------------------- meta --
+
+.PHONY: build
+build: go-build ts-build ## Build all services (Go + TS)
+
+.PHONY: test
+test: go-test py-test ## Run all fast test suites
